@@ -1,6 +1,174 @@
 import os,sys,subprocess,uuid
+import pwd,grp
 
 VERSION = "18.04"
+
+class Socker::
+    """Class keeping all the needed stuff used by socket"""
+    dockerusr = "dockerroot"
+    dockergrp = "docker"
+    socker_images_file = '/cluster/tmp/socker-images'
+    msgErr_contact = 'hpc-drift@usit.uio.no\n'
+
+    verbose = False
+
+    cmd = None
+    img = None
+    dockerv = None
+    dockeruid = None
+    dockergid = None
+    slurm_job_id = None
+
+    user = None
+    group = None
+    PWD = None
+    cid = None
+    home = None
+
+    def initialize():
+        # Get the UID and GID of the non-root user and group allowed to run docker
+        try:
+            dockeruid = pwd.getpwnam( dockerusr ).pw_uid
+            dockergid = grp.getgrnam( dockergrp ).gr_gid
+        except KeyError:
+            print 'There must exist a user "'+ dockerusr +'" and a group "'+ dockergrp + '"'
+            return False
+
+        if not [g.gr_name for g in grp.getgrall() if dockerusr in g.gr_mem] == [ dockergrp ]:
+            print 'The user "'+ dockerusr +'" must be a member of ONLY the "'+ dockergrp + '" group'
+            return False
+        
+        # Get the current user information
+        user = os.getuid()
+        group = os.getgid()
+        PWD = os.getcwd()
+        cid = str(uuid.uuid4())
+        home = pwd.getpwuid(user).pw_dir
+        #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
+        #print 'Home dir:',home
+        try:
+            slurm_job_id = os.environ['SLURM_JOB_ID']
+            print 'Slurm job id', slurm_job_id
+        except KeyError as e:
+            #print e,slurm_job_id
+            pass
+        
+        return True
+
+    def becomeRoot():
+
+        try:
+            # Set the user to root
+            os.setuid(0)
+            os.setgid(0)
+        except:
+            print 'Unable to become root.'
+            return False
+
+        return True
+
+    def getDockerVersion():
+        #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
+        # Checking for docker on the system
+        p = subprocess.Popen('docker --version',shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        out,err = p.communicate()
+        #print 'return out and err',out,err
+        if p.returncode !=0:
+            print 'Docker is not found! Please verify that Docker is installed...'
+            return False
+        else:
+            dockerv = out
+
+        return True
+
+    def safetyChecks( argv ):
+        
+        
+
+        # Get and check the list of authorized images
+        try:
+            images = filter(None,[line.strip() for line in open( socker_images_file,'r')])
+            if len(images) == 0:
+                raise Exception()
+        except:
+            print 'No authorized images to run. Socker cannot be used at the moment.\nContact ' + msgErr_contact 
+            return False
+
+        if len(argv) < 2:
+            print 'You need to specify an image to run'
+            return False
+
+        img = argv[1]
+        if not img in images:
+            if not 'ALL' in images: 
+              print '"'+ img +'" is not an authorized image for this system. Please send a request to ' + msgErr_contact
+            return False
+
+        if len(argv) >2:
+            cmd = ''
+            for a in argv[2:]:
+                if ' ' in a or ';' in a or '&' in a:
+                    # composite argument
+                    a = '"'+a+'"'
+                    sys.stderr.write('WARNING: you have a composite argument '+a+' which you\'d probably need to run via sh -c\n')
+
+                if 'docker' in a:
+                    print('For security reasons, you cannot include "docker" in your command')
+                    return False
+
+                cmd += a + ' '
+            cmd = cmd.rstrip()
+        else:
+            print 'You need to specify a command to run'
+            return False
+
+        return True
+
+    def printHelp():
+        helpstr = """NAME
+    socker - Secure runner for Docker containers
+SYNOPSIS
+    socker run <docker-image> <command>
+OPTIONS
+    --version
+        show the version number and exit
+    -h, --help
+        show this help message and exit
+    -v, --verbose
+        run in verbose mode
+    images
+        List the authorized Docker images (found in socker-images)
+    run IMAGE COMMAND
+        start a container from IMAGE executing COMMAND as the user
+EXAMPLES
+    List available images
+        $ socker images
+    Run a CentOS container and print the system release
+        $ socker run centos cat /etc/system-release
+    Run the previous command in verbose mode
+        $ socker -v run centos cat /etc/system-release
+SUPPORT
+    Contact hpc-drift@usit.uio.no
+
+        """
+        print helpstr    
+
+    def composeDockerCommand():
+        # Compose the docker command
+        dockercmd = 'docker run --name='+cid+' -d -u '+str(user)+':'+str(group)
+
+        if slurm_job_id:
+            dockercmd += ' -v $SCRATCH:$SCRATCH -e SCRATCH=$SCRATCH'    
+        dockercmd += ' -v /work/:/work/ -v '+PWD+':'+PWD+' -v '+home+':'+home+' -w '+PWD+' -e HOME='+home+' '+img
+        if cmd:
+            dockercmd += ' '+cmd
+        
+        if verbose:
+            print 'container command:\n'+cmd+'\n'
+            print 'docker command:\n'+dockercmd+'\n'
+            print 'executing.....\n'
+
+        return dockercmd
 
 def setSlurmCgroups(userID,jobID,containerPID,verbose=False):
     cpid = containerPID
@@ -30,113 +198,35 @@ def reincarnate(user_uid, user_gid):
         #print 'uid, gid = %d, %d; %s' % (os.getuid(), os.getgid(), 'ending reincarnation')
     return result
 
-def printHelp():
-    helpstr = """NAME
-    socker - Secure runner for Docker containers
-SYNOPSIS
-    socker run <docker-image> <command>
-OPTIONS
-    --version
-        show the version number and exit
-    -h, --help
-        show this help message and exit
-    -v, --verbose
-        run in verbose mode
-    images
-        List the authorized Docker images (found in socker-images)
-    run IMAGE COMMAND
-        start a container from IMAGE executing COMMAND as the user
-EXAMPLES
-    List available images
-        $ socker images
-    Run a CentOS container and print the system release
-        $ socker run centos cat /etc/system-release
-    Run the previous command in verbose mode
-        $ socker -v run centos cat /etc/system-release
-SUPPORT
-    Contact hpc-drift@usit.uio.no
-
-    """
-    print helpstr
 
 def main(argv):
-    # Intitialization
-    img = None
-    cmd = None
-    slurm_job_id = None
-    verbose = False
-    dockerv = None
-    dockeruid = None
-    dockergid = None
+    #Initialization
+    sck = Socker()
+    if not sck.initialize():
+        print 'Program stopped. Unable to initialize.'
+        sys.exit( 2 )
 
-    # checking if help is needed first
+    if not sck.becomeRoot() : sys.exit( 2 )
+
+    if not sck.getDockerVersion() : sys.exit( 2 )
+    
+    # Checking if help is needed
     if argv[0] in ['-h','--help']:
-        printHelp()
-        sys.exit()    
-    
-    # Get the UID and GID of the docker user and group
-    import pwd,grp
-    try:
-        dockeruid = pwd.getpwnam('dockerroot').pw_uid
-        dockergid = grp.getgrnam('docker').gr_gid
-    except KeyError:
-        print 'There must exist a user "dockerroot" and a group "docker"'
-        sys.exit(2)
-    if not [g.gr_name for g in grp.getgrall() if 'dockerroot' in g.gr_mem] == ['docker']:
-        print 'The user "dockerroot" must be a member of ONLY the "docker" group'
-        sys.exit(2)
-    
-    # Get the current user information
-    user = os.getuid()
-    group = os.getgid()
-    PWD = os.getcwd()
-    cid = str(uuid.uuid4())
-    home = pwd.getpwuid(user).pw_dir
-    #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
-    #print 'Home dir:',home
-    try:
-        slurm_job_id = os.environ['SLURM_JOB_ID']
-        print 'Slurm job id', slurm_job_id
-    except KeyError as e:
-        #print e,slurm_job_id
-        pass
-    
-    # Set the user to root
-    os.setuid(0)
-    os.setuid(0)
-    #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
-    
-    # Checking for docker on the system
-    p = subprocess.Popen('docker --version',shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    out,err = p.communicate()
-    #print 'return out and err',out,err
-    if p.returncode !=0:
-        print 'Docker is not found! Please verify that Docker is installed...'
-        sys.exit(2)
-    else:
-        dockerv = out
+        sck.printHelp()
+        sys.exit( 0 )    
 
+    # Show version
     if argv[0] == '--version':
         print 'Socker version: release '+VERSION
         print 'Docker version: '+dockerv
         sys.exit()
 
-    
-    # Get the list of autherized images
-    try:
-        images = filter(None,[line.strip() for line in open('/cluster/tmp/socker-images','r')])
-        if len(images) == 0:
-            raise Exception()
-    except:
-        print 'No authorized images to run. Socker cannot be used at the moment.\nContact hpc-drift@usit.uio.no\n'
-        sys.exit(2)
-        
+    # Activate verbose 
     if argv[0] in ['-v','--verbose']:
         del argv[0]
-        verbose = True
-        if len(argv) == 0:
-            print 'You need to specify options to run in verbose mode'
-            sys.exit(2)
+        sck.verbose = True
+
+    # List images
     if argv[0] == 'images':
         print '\n'.join(images)
         sys.exit()
@@ -149,56 +239,27 @@ def main(argv):
         # else:
         #     print err
         #     sys.exit(2)
+    # Check if ready to run
     elif argv[0] == 'run':
-        if len(argv) < 2:
-            print 'You need to specify an image to run'
-            sys.exit(2)
         try:
-            img = argv[1]
-            if not img in images:
-                print '"'+img+'" is not an authorized image for this system. Please send a request to hpc-drift@usit.uio.no'
-                sys.exit()
-            if len(argv) >2:
-                cmd = ''
-                for a in argv[2:]:
-                    if ' ' in a or ';' in a or '&' in a:
-                        # composite argument
-                        a = '"'+a+'"'
-                        sys.stderr.write('WARNING: you have a composite argument '+a+' which you\'d probably need to run via sh -c\n')
-                    if 'docker' in a:
-                        print('For security reasons, you cannot include "docker" in your command')
-                        sys.exit()
-                    cmd += a + ' '
-                cmd = cmd.rstrip()
-            else:
-                print 'You need to specify a command to run'
-                sys.exit(2)
-                
+            if not sck.safetyCheck( argv ):
+                print 'Program stopped. Request support from ' + sck.msgErr_contact
+                sys.exit( 2 )
         except:
             print 'The run command should be: socker run <image> <command>'
-            sys.exit(2)
-        
+            sys.exit( 2 )
+    # No command, no joy
     else:
-        print 'invalid option'
+        print 'Invalid option'
         print 'type -h or --help for help'
         sys.exit(2)
     
-    # Compose the docker command
-    dockercmd = 'docker run --name='+cid+' -d -u '+str(user)+':'+str(group)
-    if slurm_job_id:
-        dockercmd += ' -v $SCRATCH:$SCRATCH -e SCRATCH=$SCRATCH'    
-    dockercmd += ' -v /work/:/work/ -v '+PWD+':'+PWD+' -v '+home+':'+home+' -w '+PWD+' -e HOME='+home+' '+img
-    if cmd:
-        dockercmd += ' '+cmd
     
-    if verbose:
-        print 'container command:\n'+cmd+'\n'
-        print 'docker command:\n'+dockercmd+'\n'
-        print 'executing.....\n'
-    
+
     # Start the container (run this command as "dockeruser" not as root)
-    p = subprocess.Popen(dockercmd, preexec_fn=reincarnate(dockeruid,dockergid), shell=True, \
-                         stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    p = subprocess.Popen( sck.composeDockerCommand(), 
+                          preexec_fn=reincarnate(dockeruid, dockergid), shell=True, \
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     out,err = p.communicate()
     if p.returncode != 0:
@@ -209,7 +270,7 @@ def main(argv):
         print 'container ID:\n',out
     #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
     
-    if slurm_job_id:
+    if sck.slurm_job_id:
         # Get the container's PID
         cpid = int(subprocess.Popen("docker inspect -f '{{ .State.Pid }}' "+cid,\
                                 shell=True, stdout=subprocess.PIPE).stdout.read().strip())
@@ -221,7 +282,7 @@ def main(argv):
         for pid in cpids:
             setSlurmCgroups(user,slurm_job_id,pid,verbose)
     
-    if verbose:
+    if sck.verbose:
         print 'waiting for the container to exit...\n'
     subprocess.Popen('docker wait '+cid, shell=True, stdout=subprocess.PIPE).stdout.read()
     
