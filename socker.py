@@ -42,7 +42,7 @@ class Socker::
         user = os.getuid()
         group = os.getgid()
         PWD = os.getcwd()
-        cid = str(uuid.uuid4())
+        containerID = str(uuid.uuid4())
         home = pwd.getpwuid(user).pw_dir
         #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
         #print 'Home dir:',home
@@ -56,6 +56,7 @@ class Socker::
         return True
 
     def becomeRoot():
+        """Change the user and group running the process to root:root"""
 
         try:
             # Set the user to root
@@ -68,10 +69,11 @@ class Socker::
         return True
 
     def getDockerVersion():
-        #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
-        # Checking for docker on the system
-        p = subprocess.Popen('docker --version',shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        """Run docker --version and keep result in dockerv"""
+        p = subprocess.Popen('docker --version', \
+                            shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         out,err = p.communicate()
+
         #print 'return out and err',out,err
         if p.returncode !=0:
             print 'Docker is not found! Please verify that Docker is installed...'
@@ -82,8 +84,7 @@ class Socker::
         return True
 
     def safetyChecks( argv ):
-        
-        
+        """Second phase initialization, checking values to ensure it is safe to run while building cmd string"""
 
         # Get and check the list of authorized images
         try:
@@ -104,19 +105,20 @@ class Socker::
               print '"'+ img +'" is not an authorized image for this system. Please send a request to ' + msgErr_contact
             return False
 
+        # Check commands==remainingOptions to be run inside the container
         if len(argv) >2:
             cmd = ''
-            for a in argv[2:]:
-                if ' ' in a or ';' in a or '&' in a:
+            for nextOption in argv[2:]:
+                if ' ' in nextOption or ';' in nextOption or '&' in nextOption:
                     # composite argument
-                    a = '"'+a+'"'
-                    sys.stderr.write('WARNING: you have a composite argument '+a+' which you\'d probably need to run via sh -c\n')
+                    nextOption = '"'+ nextOption +'"'
+                    sys.stderr.write('WARNING: you have a composite argument '+nextOption+' which you\'d probably need to run via sh -c\n')
 
-                if 'docker' in a:
+                if 'docker' in nextOption:
                     print('For security reasons, you cannot include "docker" in your command')
                     return False
 
-                cmd += a + ' '
+                cmd += nextOption + ' '
             cmd = cmd.rstrip()
         else:
             print 'You need to specify a command to run'
@@ -154,12 +156,14 @@ SUPPORT
         print helpstr    
 
     def composeDockerCommand():
-        # Compose the docker command
-        dockercmd = 'docker run --name='+cid+' -d -u '+str(user)+':'+str(group)
+        """Build and return the string to run the container"""
+        dockercmd = 'docker run --name='+ containerID +' -d -u '+str(user)+':'+str(group)
 
+        # TODO: fix list of volumes
         if slurm_job_id:
             dockercmd += ' -v $SCRATCH:$SCRATCH -e SCRATCH=$SCRATCH'    
         dockercmd += ' -v /work/:/work/ -v '+PWD+':'+PWD+' -v '+home+':'+home+' -w '+PWD+' -e HOME='+home+' '+img
+
         if cmd:
             dockercmd += ' '+cmd
         
@@ -170,26 +174,80 @@ SUPPORT
 
         return dockercmd
 
-def setSlurmCgroups(userID,jobID,containerPID,verbose=False):
-    cpid = containerPID
-    cgroupID = 'slurm/uid_'+str(userID)+'/job_'+str(jobID)+'/step_batch '+str(cpid)
-    # Set the container process free from the docker cgroups
-    subprocess.Popen('cgclassify -g blkio:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
-    subprocess.Popen('cgclassify -g net_cls:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
-    subprocess.Popen('cgclassify -g devices:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
-    subprocess.Popen('cgclassify -g cpuacct:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
-    subprocess.Popen('cgclassify -g cpu:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
-    # Include the container process in the Slurm cgroups
-    out = ''
-    out += 'adding '+str(cpid)+' to Slurm\'s memory cgroup: '+\
-    subprocess.Popen('cgclassify -g memory:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
-    out += '\nadding '+str(cpid)+' to Slurm\'s cpuset cgroup: '+\
-    subprocess.Popen('cgclassify -g cpuset:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
-    out += '\nadding '+str(cpid)+' to Slurm\'s freezer cgroup: '+\
-    subprocess.Popen('cgclassify -g freezer:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
-    if verbose:
-        print out
+    def startContainer():
+        """Start the container as "dockeruser", not as root) """
+        p = subprocess.Popen( composeDockerCommand(), \
+                              preexec_fn=reincarnate( dockeruid, dockergid), shell=True, \
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        out,err = p.communicate()
+        if p.returncode != 0:
+            print '#Error: '+err
+            sys.exit(2)
+        elif verbose:
+            print err
+            print 'container ID:\n',out
+
+    def moveContainerCGroup():
+        """ Change container from docker to slurm cgroups """
+        if slurm_job_id:
+            # Get the container's PID
+            cpid = int( subprocess.Popen("docker inspect -f '{{ .State.Pid }}' "+containerID,\
+                                    shell=True, stdout=subprocess.PIPE).stdout.read().strip() )
+            #print 'container PID: ', cpid
+            # Classify the container process (and all of it's children) to the Slurm's cgroups assigned to the job
+            cchildren = subprocess.Popen('pgrep -P'+str(cpid), shell=True, stdout=subprocess.PIPE).stdout.read().split('\n')
+            cpids = [cpid] + [int(pid) for pid in cchildren if pid.strip() != '']
+            #print cpids
+            for pid in cpids:
+                setSlurmCgroups( user, slurm_job_id, pid )
+
+    def setSlurmCgroups( userID, jobID, containerPID ):
+        """ Replace the CGroup of a container with the one defined by a Job """
+        cpid = containerPID
+        cgroupID = 'slurm/uid_'+str(userID)+'/job_'+str(jobID)+'/step_batch '+str(cpid)
+
+        # Set the container process free from the docker cgroups
+        subprocess.Popen('cgclassify -g blkio:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
+        subprocess.Popen('cgclassify -g net_cls:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
+        subprocess.Popen('cgclassify -g devices:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
+        subprocess.Popen('cgclassify -g cpuacct:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
+        subprocess.Popen('cgclassify -g cpu:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
+
+        # Include the container process in the Slurm cgroups
+        out = ''
+        out += 'adding '+str(cpid)+' to Slurm\'s memory cgroup: '+\
+        subprocess.Popen('cgclassify -g memory:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
+        out += '\nadding '+str(cpid)+' to Slurm\'s cpuset cgroup: '+\
+        subprocess.Popen('cgclassify -g cpuset:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
+        out += '\nadding '+str(cpid)+' to Slurm\'s freezer cgroup: '+\
+        subprocess.Popen('cgclassify -g freezer:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
+        if verbose:
+            print out
     
+    def waitContainer():
+        """Wait for container to finish, asking docker"""
+        if verbose:
+            print 'waiting for the container to exit...\n'
+        subprocess.Popen('docker wait '+containerID, shell=True, stdout=subprocess.PIPE).stdout.read()
+
+    def captureContainerExitOutput()
+        """ After the container exit's, capture it's output"""
+        clog = subprocess.Popen( "docker inspect -f '{{.LogPath}}' "+str(containerID), \
+                                shell=True, stdout=subprocess.PIPE).stdout.read().rstrip()
+        with open(clog,'r') as f:
+            if verbose:
+                print 'container output:\n'
+            for line in f:
+                d = eval(line.replace('\n',''))
+                if d['stream'] == 'stderr':
+                    sys.stdout.write('#Error: '+d['log'])
+                else:
+                    sys.stdout.write(d['log'])
+        if verbose:        
+            print '\nremoving the container...\n'
+        subprocess.Popen('docker rm '+containerID, shell=True, stdout=subprocess.PIPE).stdout.read()
+
 def reincarnate(user_uid, user_gid):
     def result():
         #print 'uid, gid = %d, %d; %s' % (os.getuid(), os.getgid(), 'starting reincarnation')
@@ -200,7 +258,7 @@ def reincarnate(user_uid, user_gid):
 
 
 def main(argv):
-    #Initialization
+    # Initialization
     sck = Socker()
     if not sck.initialize():
         print 'Program stopped. Unable to initialize.'
@@ -252,54 +310,19 @@ def main(argv):
     else:
         print 'Invalid option'
         print 'type -h or --help for help'
-        sys.exit(2)
+        sys.exit( 2 )
     
-    
+    # Start the container (run this command as "dockeruser", not as root)
+    startContainer()
 
-    # Start the container (run this command as "dockeruser" not as root)
-    p = subprocess.Popen( sck.composeDockerCommand(), 
-                          preexec_fn=reincarnate(dockeruid, dockergid), shell=True, \
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Change container from docker to slurm cgroups
+    moveContainerCGroup()
     
-    out,err = p.communicate()
-    if p.returncode != 0:
-        print '#Error: '+err
-        sys.exit(2)
-    elif verbose:
-        print err
-        print 'container ID:\n',out
-    #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
+    # Wait container to finish
+    waitContainer()
     
-    if sck.slurm_job_id:
-        # Get the container's PID
-        cpid = int(subprocess.Popen("docker inspect -f '{{ .State.Pid }}' "+cid,\
-                                shell=True, stdout=subprocess.PIPE).stdout.read().strip())
-        #print 'container PID: ', cpid
-        # Classify the container process (and all of it's children) to the Slurm's cgroups assigned to the job
-        cchildren = subprocess.Popen('pgrep -P'+str(cpid), shell=True, stdout=subprocess.PIPE).stdout.read().split('\n')
-        cpids = [cpid] + [int(pid) for pid in cchildren if pid.strip() != '']
-        #print cpids
-        for pid in cpids:
-            setSlurmCgroups(user,slurm_job_id,pid,verbose)
-    
-    if sck.verbose:
-        print 'waiting for the container to exit...\n'
-    subprocess.Popen('docker wait '+cid, shell=True, stdout=subprocess.PIPE).stdout.read()
-    
-    # After the container exit's, capture it's output
-    clog = subprocess.Popen("docker inspect -f '{{.LogPath}}' "+str(cid), shell=True, stdout=subprocess.PIPE).stdout.read().rstrip()
-    with open(clog,'r') as f:
-        if verbose:
-            print 'container output:\n'
-        for line in f:
-            d = eval(line.replace('\n',''))
-            if d['stream'] == 'stderr':
-                sys.stdout.write('#Error: '+d['log'])
-            else:
-                sys.stdout.write(d['log'])
-    if verbose:        
-        print '\nremoving the container...\n'
-    subprocess.Popen('docker rm '+cid, shell=True, stdout=subprocess.PIPE).stdout.read()
+    # Capture container's output on exit
+    captureContainerExitOutput()
 
 if __name__ == "__main__":
    main(sys.argv[1:])
