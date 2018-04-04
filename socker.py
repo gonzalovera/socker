@@ -1,6 +1,6 @@
 import os,sys,subprocess,uuid
 
-VERSION = "16.12"
+VERSION = "18.04"
 
 def setSlurmCgroups(userID,jobID,containerPID,verbose=False):
     cpid = containerPID
