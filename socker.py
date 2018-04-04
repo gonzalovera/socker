@@ -3,52 +3,57 @@ import pwd,grp
 
 VERSION = "18.04"
 
-class Socker::
+class Socker:
     """Class keeping all the needed stuff used by socket"""
-    dockerusr = "dockerroot"
-    dockergrp = "docker"
-    socker_images_file = '/cluster/tmp/socker-images'
-    msgErr_contact = 'hpc-drift@usit.uio.no\n'
 
-    verbose = False
+    def __init__( self ):
+        # TODO: Define __init__ method and self objects
+        # TODO: although... this is a singleton isn't?
+        self.dockerusr = "dockerroot"
+        self.dockergrp = "docker"
+        self.socker_images_file = '/cluster/tmp/socker-images'
+        self.msgErr_contact = 'hpc-drift@usit.uio.no\n'
 
-    cmd = None
-    img = None
-    dockerv = None
-    dockeruid = None
-    dockergid = None
-    slurm_job_id = None
+        self.verbose = False
 
-    user = None
-    group = None
-    PWD = None
-    cid = None
-    home = None
+        self.cmd = None
+        self.img = None
+        self.dockerv = None
+        self.dockeruid = None
+        self.dockergid = None
+        self.slurm_job_id = None
 
-    def initialize():
+        self.user = None
+        self.group = None
+        self.PWD = None
+        self.containerID = None
+        self.home = None
+
+
+    def initialize( self ):
+        """Set the first values """
         # Get the UID and GID of the non-root user and group allowed to run docker
         try:
-            dockeruid = pwd.getpwnam( dockerusr ).pw_uid
-            dockergid = grp.getgrnam( dockergrp ).gr_gid
+            self.dockeruid = pwd.getpwnam( self.dockerusr ).pw_uid
+            self.dockergid = grp.getgrnam( self.dockergrp ).gr_gid
         except KeyError:
-            print 'There must exist a user "'+ dockerusr +'" and a group "'+ dockergrp + '"'
+            print 'There must exist a user "'+ self.dockerusr +'" and a group "'+ self.dockergrp + '"'
             return False
 
-        if not [g.gr_name for g in grp.getgrall() if dockerusr in g.gr_mem] == [ dockergrp ]:
-            print 'The user "'+ dockerusr +'" must be a member of ONLY the "'+ dockergrp + '" group'
+        if not [g.gr_name for g in grp.getgrall() if self.dockerusr in g.gr_mem] == [ dockergrp ]:
+            print 'The user "'+ self.dockerusr +'" must be a member of ONLY the "'+ self.dockergrp + '" group'
             return False
         
         # Get the current user information
-        user = os.getuid()
-        group = os.getgid()
-        PWD = os.getcwd()
-        containerID = str(uuid.uuid4())
-        home = pwd.getpwuid(user).pw_dir
-        #print 'current UID: ',os.getuid(),'\t Current GID: ',os.getgid()
-        #print 'Home dir:',home
+        self.user = os.getuid()
+        self.group = os.getgid()
+        self.PWD = os.getcwd()
+        self.containerID = str( uuid.uuid4() )
+        self.home = pwd.getpwuid( self.user ).pw_dir
+
         try:
-            slurm_job_id = os.environ['SLURM_JOB_ID']
-            print 'Slurm job id', slurm_job_id
+            self.slurm_job_id = os.environ['SLURM_JOB_ID']
+            print 'Slurm job id', self.slurm_job_id
         except KeyError as e:
             #print e,slurm_job_id
             pass
@@ -57,7 +62,6 @@ class Socker::
 
     def becomeRoot():
         """Change the user and group running the process to root:root"""
-
         try:
             # Set the user to root
             os.setuid(0)
@@ -79,7 +83,7 @@ class Socker::
             print 'Docker is not found! Please verify that Docker is installed...'
             return False
         else:
-            dockerv = out
+            self.dockerv = out
 
         return True
 
@@ -88,26 +92,26 @@ class Socker::
 
         # Get and check the list of authorized images
         try:
-            images = filter(None,[line.strip() for line in open( socker_images_file,'r')])
+            images = filter(None,[line.strip() for line in open( self.socker_images_file,'r')])
             if len(images) == 0:
                 raise Exception()
         except:
-            print 'No authorized images to run. Socker cannot be used at the moment.\nContact ' + msgErr_contact 
+            print 'No authorized images to run. Socker cannot be used at the moment.\nContact ' + self.msgErr_contact 
             return False
 
         if len(argv) < 2:
             print 'You need to specify an image to run'
             return False
 
-        img = argv[1]
-        if not img in images:
+        self.img = argv[1]
+        if not self.img in images:
             if not 'ALL' in images: 
-              print '"'+ img +'" is not an authorized image for this system. Please send a request to ' + msgErr_contact
+              print '"'+ self.img +'" is not an authorized image for this system. Please send a request to ' + self.msgErr_contact
             return False
 
         # Check commands==remainingOptions to be run inside the container
         if len(argv) >2:
-            cmd = ''
+            self.cmd = ''
             for nextOption in argv[2:]:
                 if ' ' in nextOption or ';' in nextOption or '&' in nextOption:
                     # composite argument
@@ -118,8 +122,8 @@ class Socker::
                     print('For security reasons, you cannot include "docker" in your command')
                     return False
 
-                cmd += nextOption + ' '
-            cmd = cmd.rstrip()
+                self.cmd += nextOption + ' '
+            self.cmd = self.cmd.rstrip()
         else:
             print 'You need to specify a command to run'
             return False
@@ -157,18 +161,22 @@ SUPPORT
 
     def composeDockerCommand():
         """Build and return the string to run the container"""
-        dockercmd = 'docker run --name='+ containerID +' -d -u '+str(user)+':'+str(group)
+        dockercmd = 'docker run --name='+ self.containerID +' -d -u '+str(self.user)+':'+str(self.group)
 
         # TODO: fix list of volumes
-        if slurm_job_id:
+        if self.slurm_job_id:
             dockercmd += ' -v $SCRATCH:$SCRATCH -e SCRATCH=$SCRATCH'    
-        dockercmd += ' -v /work/:/work/ -v '+PWD+':'+PWD+' -v '+home+':'+home+' -w '+PWD+' -e HOME='+home+' '+img
+        dockercmd += ' -v /work/:/work/ \
+                    -v '+self.PWD+':'+self.PWD+'\
+                    -v '+self.home+':'+self.home+'\
+                    -w '+self.PWD+' -e HOME='+self.home+\
+                    ' '+self.img
 
-        if cmd:
-            dockercmd += ' '+cmd
+        if self.cmd:
+            dockercmd += ' '+self.cmd
         
         if verbose:
-            print 'container command:\n'+cmd+'\n'
+            print 'container command:\n'+self.cmd+'\n'
             print 'docker command:\n'+dockercmd+'\n'
             print 'executing.....\n'
 
@@ -177,7 +185,7 @@ SUPPORT
     def startContainer():
         """Start the container as "dockeruser", not as root) """
         p = subprocess.Popen( composeDockerCommand(), \
-                              preexec_fn=reincarnate( dockeruid, dockergid), shell=True, \
+                              preexec_fn=reincarnate( self.dockeruid, self.dockergid), shell=True, \
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         out,err = p.communicate()
@@ -190,15 +198,15 @@ SUPPORT
 
     def moveContainerCGroup():
         """ Change container from docker to slurm cgroups """
-        if slurm_job_id:
+        if self.slurm_job_id:
             # Get the container's PID
-            cpid = int( subprocess.Popen("docker inspect -f '{{ .State.Pid }}' "+containerID,\
+            cpid = int( subprocess.Popen("docker inspect -f '{{ .State.Pid }}' "+ self.containerID,\
                                     shell=True, stdout=subprocess.PIPE).stdout.read().strip() )
-            #print 'container PID: ', cpid
+
             # Classify the container process (and all of it's children) to the Slurm's cgroups assigned to the job
             cchildren = subprocess.Popen('pgrep -P'+str(cpid), shell=True, stdout=subprocess.PIPE).stdout.read().split('\n')
             cpids = [cpid] + [int(pid) for pid in cchildren if pid.strip() != '']
-            #print cpids
+
             for pid in cpids:
                 setSlurmCgroups( user, slurm_job_id, pid )
 
@@ -222,21 +230,21 @@ SUPPORT
         subprocess.Popen('cgclassify -g cpuset:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
         out += '\nadding '+str(cpid)+' to Slurm\'s freezer cgroup: '+\
         subprocess.Popen('cgclassify -g freezer:/'+cgroupID, shell=True, stdout=subprocess.PIPE).stdout.read()
-        if verbose:
+        if self.verbose:
             print out
     
     def waitContainer():
         """Wait for container to finish, asking docker"""
-        if verbose:
+        if self.verbose:
             print 'waiting for the container to exit...\n'
-        subprocess.Popen('docker wait '+containerID, shell=True, stdout=subprocess.PIPE).stdout.read()
+        subprocess.Popen('docker wait '+self.containerID, shell=True, stdout=subprocess.PIPE).stdout.read()
 
-    def captureContainerExitOutput()
+    def captureContainerExitOutput():
         """ After the container exit's, capture it's output"""
-        clog = subprocess.Popen( "docker inspect -f '{{.LogPath}}' "+str(containerID), \
+        clog = subprocess.Popen( "docker inspect -f '{{.LogPath}}' "+str(self.containerID), \
                                 shell=True, stdout=subprocess.PIPE).stdout.read().rstrip()
         with open(clog,'r') as f:
-            if verbose:
+            if self.verbose:
                 print 'container output:\n'
             for line in f:
                 d = eval(line.replace('\n',''))
@@ -244,9 +252,9 @@ SUPPORT
                     sys.stdout.write('#Error: '+d['log'])
                 else:
                     sys.stdout.write(d['log'])
-        if verbose:        
+        if self.verbose:        
             print '\nremoving the container...\n'
-        subprocess.Popen('docker rm '+containerID, shell=True, stdout=subprocess.PIPE).stdout.read()
+        subprocess.Popen('docker rm '+self.containerID, shell=True, stdout=subprocess.PIPE).stdout.read()
 
 def reincarnate(user_uid, user_gid):
     def result():
@@ -260,6 +268,7 @@ def reincarnate(user_uid, user_gid):
 def main(argv):
     # Initialization
     sck = Socker()
+
     if not sck.initialize():
         print 'Program stopped. Unable to initialize.'
         sys.exit( 2 )
@@ -325,4 +334,4 @@ def main(argv):
     captureContainerExitOutput()
 
 if __name__ == "__main__":
-   main(sys.argv[1:])
+   main( sys.argv[1:] )
