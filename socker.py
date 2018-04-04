@@ -175,7 +175,7 @@ SUPPORT
         if self.cmd:
             dockercmd += ' '+self.cmd
         
-        if verbose:
+        if self.verbose:
             print 'container command:\n'+self.cmd+'\n'
             print 'docker command:\n'+dockercmd+'\n'
             print 'executing.....\n'
@@ -184,7 +184,7 @@ SUPPORT
 
     def startContainer( self ):
         """Start the container as "dockeruser", not as root) """
-        p = subprocess.Popen( composeDockerCommand(), \
+        p = subprocess.Popen( self.composeDockerCommand(), \
                               preexec_fn=reincarnate( self.dockeruid, self.dockergid), shell=True, \
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
@@ -192,7 +192,7 @@ SUPPORT
         if p.returncode != 0:
             print '#Error: '+err
             sys.exit(2)
-        elif verbose:
+        elif self.verbose:
             print err
             print 'container ID:\n',out
 
@@ -267,7 +267,7 @@ def reincarnate(user_uid, user_gid):
 
 def main(argv):
     """ socker algo """
-    
+
     # Initialization
     sck = Socker()
 
@@ -311,7 +311,7 @@ def main(argv):
     # Check if ready to run
     elif argv[0] == 'run':
         try:
-            if not sck.safetyCheck( argv ):
+            if not sck.safetyChecks( argv ):
                 print 'Program stopped. Request support from ' + sck.msgErr_contact
                 sys.exit( 2 )
         except:
@@ -324,16 +324,22 @@ def main(argv):
         sys.exit( 2 )
     
     # Start the container (run this command as "dockeruser", not as root)
-    startContainer()
+    sck.startContainer()
 
     # Change container from docker to slurm cgroups
-    moveContainerCGroup()
+    sck.moveContainerCGroup()
     
     # Wait container to finish
-    waitContainer()
+    sck.waitContainer()
     
     # Capture container's output on exit
-    captureContainerExitOutput()
+    sck.captureContainerExitOutput()
 
 if __name__ == "__main__":
-   main( sys.argv[1:] )
+    if len(argv) >2:
+        main( sys.argv[1:] )
+    else:
+        print 'No options'
+        print 'type -h or --help for help'
+        sys.exit( 2 )
+
