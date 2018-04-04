@@ -18,6 +18,7 @@ class Socker:
 
         self.cmd = None
         self.img = None
+        self.images = None
         self.dockerv = None
         self.dockeruid = None
         self.dockergid = None
@@ -92,8 +93,8 @@ class Socker:
 
         # Get and check the list of authorized images
         try:
-            images = filter(None,[line.strip() for line in open( self.socker_images_file,'r')])
-            if len(images) == 0:
+            self.images = filter(None,[line.strip() for line in open( self.socker_images_file,'r')])
+            if len(self.images) == 0:
                 raise Exception()
         except:
             print 'No authorized images to run. Socker cannot be used at the moment.\nContact ' + self.msgErr_contact 
@@ -104,8 +105,8 @@ class Socker:
             return False
 
         self.img = argv[1]
-        if not self.img in images:
-            if not 'ALL' in images: 
+        if not self.img in self.images:
+            if not 'ALL' in self.images: 
               print '"'+ self.img +'" is not an authorized image for this system. Please send a request to ' + self.msgErr_contact
             return False
 
@@ -279,6 +280,10 @@ def main(argv):
 
     if not sck.getDockerVersion() : sys.exit( 2 )
     
+    if len(argv) == 0:
+        sck.printHelp()
+        sys.exit( 0 )
+
     # Checking if help is needed
     if argv[0] in ['-h','--help']:
         sck.printHelp()
@@ -297,7 +302,7 @@ def main(argv):
 
     # List images
     if argv[0] == 'images':
-        print '\n'.join(images)
+        print '\n'.join(self.images)
         sys.exit()
         ##This part should be used when you have a secure local docker registry
         # p = subprocess.Popen('docker images', shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -336,10 +341,4 @@ def main(argv):
     sck.captureContainerExitOutput()
 
 if __name__ == "__main__":
-    if len(argv) >2:
-        main( sys.argv[1:] )
-    else:
-        print 'No options'
-        print 'type -h or --help for help'
-        sys.exit( 2 )
-
+    main( sys.argv[1:] )
