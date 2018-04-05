@@ -112,23 +112,24 @@ class Socker:
         #     print err
         #     sys.exit(2)
 
-    def safetyChecks( self, argv ):
+    def safetyChecks( self, cmdOptions ):
         """Second phase initialization, checking values to ensure it is safe to run while building cmd string"""
 
-        if len(argv) < 2:
+        if len(cmdOptions) < 2:
             print 'You need to specify an image to run'
             return False
 
-        self.img = argv[1]
+        self.img = cmdOptions[1]
         if not self.img in self.images:
             if not 'ALL' in self.images: 
               print '"'+ self.img +'" is not an authorized image for this system. Please send a request to ' + self.msgErr_contact
             return False
 
         # Check commands==remainingOptions to be run inside the container
-        if len(argv) >2:
+        if len(cmdOptions) >2:
             self.cmd = ''
-            for nextOption in argv[2:]:
+
+            for nextOption in cmdOptions[2:] :
                 if ' ' in nextOption or ';' in nextOption or '&' in nextOption:
                     # composite argument
                     nextOption = '"'+ nextOption +'"'
@@ -139,6 +140,7 @@ class Socker:
                     return False
 
                 self.cmd += nextOption + ' '
+
             self.cmd = self.cmd.rstrip()
         else:
             print 'You need to specify a command to run'
@@ -224,7 +226,7 @@ SUPPORT
             cpids = [cpid] + [int(pid) for pid in cchildren if pid.strip() != '']
 
             for pid in cpids:
-                setSlurmCgroups( user, slurm_job_id, pid )
+                self.setSlurmCgroups( user, slurm_job_id, pid )
 
     def setSlurmCgroups( self, userID, jobID, containerPID ):
         """ Replace the CGroup of a container with the one defined by a Job """
@@ -284,6 +286,13 @@ def reincarnate(user_uid, user_gid):
 def main(argv):
     """ socker main algorithm """
 
+    # Initialization
+    sck = Socker()
+
+    if not sck.initialize():
+        print 'Program stopped. Unable to initialize.'
+        sys.exit( 2 )
+
     # Checking empty args
     if len(argv) == 0:
         sck.printHelp()
@@ -293,13 +302,6 @@ def main(argv):
     if argv[0] in ['-h','--help']:
         sck.printHelp()
         sys.exit( 0 ) 
-
-    # Initialization
-    sck = Socker()
-
-    if not sck.initialize():
-        print 'Program stopped. Unable to initialize.'
-        sys.exit( 2 )
 
     if not sck.becomeRoot() : sys.exit( 2 )
 
@@ -320,7 +322,7 @@ def main(argv):
     if argv[0] == 'images':
         if not sck.loadImages(): 
             sys.exit( 2 )
-        print '\n'.join( self.images )
+        print '\n'.join( sck.images )
         sys.exit()
 
     # Check if ready to run
