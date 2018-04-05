@@ -26,10 +26,7 @@ class Socker:
 
         self.user = None
         self.group = None
-        self.PWD = None
         self.containerID = None
-        self.home = None
-
 
     def initialize( self ):
         """Set the first values """
@@ -151,14 +148,18 @@ class Socker:
             self.images = filter(None,[line.strip() for line in open( self.socker_images_file,'r')])
             if len(self.images) == 0:
                 raise Exception()
+
         except:
             print 'No authorized images to run. Socker cannot be used at the moment.\nContact ' + self.msgErr_contact 
             if self.verbose:
                 e = sys.exc_info()[0]
                 print 'Error: '+str( e )
+
             return False
+
         else:
             return True
+
         ##This part should be used when you have a secure local docker registry
         # p = subprocess.Popen('docker images', shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         # out,err = p.communicate()
@@ -177,15 +178,13 @@ class Socker:
             return False
 
         self.img = cmdOptions[1]
-        if not self.img in self.images:
-            if not 'ALL' in self.images: 
-              print '"'+ self.img +'" is not an authorized image for this system. Please send a request to ' + self.msgErr_contact
+        if not self.img in self.images and not 'ALL' in self.images:
+            print '"'+ self.img +'" is not an authorized image for this system. Please send a request to ' + self.msgErr_contact
             return False
 
+        self.cmd = ''
         # Check commands==remainingOptions to be run inside the container
         if len(cmdOptions) >2:
-            self.cmd = ''
-
             for nextOption in cmdOptions[2:] :
                 if ' ' in nextOption or ';' in nextOption or '&' in nextOption:
                     # composite argument
@@ -277,7 +276,7 @@ SUPPORT
             cpids = [cpid] + [int(pid) for pid in cchildren if pid.strip() != '']
 
             for pid in cpids:
-                self.setSlurmCgroups( self, self.user, self.slurm_job_id, pid )
+                self.setSlurmCgroups( pid )
 
     def setSlurmCgroups( self, containerPID ):
         """ Replace the CGroup of a container with the one defined by a Job """
@@ -369,9 +368,11 @@ def main(argv):
         del argv[0]
         sck.verbose = True
 
+    bImagesLoaded = sck.loadImages()
+
     # List images
     if argv[0] == 'images':
-        if not sck.loadImages(): 
+        if not bImagesLoaded: 
             sys.exit( 2 )
         print '\n'.join( sck.images )
         sys.exit()
