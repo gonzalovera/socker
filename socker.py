@@ -48,10 +48,8 @@ class Socker:
         # Get the current user information
         self.user = os.getuid()
         self.group = os.getgid()
-        self.PWD = os.getcwd()
         self.containerID = str( uuid.uuid4() )
-        self.home = pwd.getpwuid( self.user ).pw_dir
-
+        
         try:
             self.slurm_job_id = os.environ['SLURM_JOB_ID']
             print 'Slurm job id', self.slurm_job_id
@@ -60,6 +58,65 @@ class Socker:
             pass
         
         return True
+
+    def buildVolumesArgs( self ):
+        """ return string with list of volumes to build the docker call """
+        hstVols = []
+        cntVols = []
+        strDockerCmd = ''
+
+        # DEFINE AS MANY AS NEEDED - Cluster site specific!
+
+        # Share current working directory
+        PWD = os.getcwd()
+        hstVols.append( PWD )
+        cntVols.append( PWD )
+
+        # Share user's $home
+        home = pwd.getpwuid( self.user ).pw_dir
+        hstVols.append( home )
+        cntVols.append( home )
+
+        # Share work folder
+        work = '/work/'
+        hstVols.append( work )
+        cntVols.append( work )
+
+        # Share scratch folder
+        if self.slurm_job_id:
+            scratch = '$SCRATCH'
+            hstVols.append( scratch )
+            cntVols.append( scratch )
+
+        for hostVolume, containerVolume in zip( hstVols, cntVols ):
+            strDockerCmd += ' -v '+ hostVolume+':'+containerVolume
+
+        # Define  -w, --workdir string  Working directory inside the container
+        strDockerCmd += ' -w '+ PWD
+
+        return strDockerCmd
+
+    def buildEnvArgs( self ):
+        """ return string with list of environmental variables to build the docker call """
+        envVar = []
+        envVal = []
+        strDockerCmd = ''
+
+        # DEFINE AS MANY AS NEEDED - Cluster site specific!
+
+        # Define home folder
+        envVar.append( 'HOME' )
+        envVal.append( pwd.getpwuid( self.user ).pw_dir )
+
+        # Define scratch var
+        if self.slurm_job_id:
+            envVar.append( 'SCRATCH' )
+            envVal.append( '$SCRATCH' )
+
+        for envVarName, envValue in zip( envVar, envVal ):
+            strDockerCmd += ' -v '+ envVarName+'='+envValue
+
+        return strDockerCmd
 
     def becomeRoot( self ):
         """Change the user and group running the process to root:root"""
@@ -180,15 +237,9 @@ SUPPORT
     def composeDockerCommand( self ):
         """Build and return the string to run the container"""
         dockercmd = 'docker run --name='+ self.containerID +' -d -u '+str(self.user)+':'+str(self.group)
-
-        # TODO: fix list of volumes
-        if self.slurm_job_id:
-            dockercmd += ' -v $SCRATCH:$SCRATCH -e SCRATCH=$SCRATCH'    
-        dockercmd += ' -v /work/:/work/ \
-                    -v '+self.PWD+':'+self.PWD+'\
-                    -v '+self.home+':'+self.home+'\
-                    -w '+self.PWD+' -e HOME='+self.home+\
-                    ' '+self.img
+        dockercmd += self.buildVolumesArgs()
+        dockercmd += self.buildEnvArgs()
+        dockercmd += ' '+self.img
 
         if self.cmd:
             dockercmd += ' '+self.cmd
@@ -226,12 +277,12 @@ SUPPORT
             cpids = [cpid] + [int(pid) for pid in cchildren if pid.strip() != '']
 
             for pid in cpids:
-                self.setSlurmCgroups( user, slurm_job_id, pid )
+                self.setSlurmCgroups( self, self.user, self.slurm_job_id, pid )
 
-    def setSlurmCgroups( self, userID, jobID, containerPID ):
+    def setSlurmCgroups( self, containerPID ):
         """ Replace the CGroup of a container with the one defined by a Job """
         cpid = containerPID
-        cgroupID = 'slurm/uid_'+str(userID)+'/job_'+str(jobID)+'/step_batch '+str(cpid)
+        cgroupID = 'slurm/uid_'+str(self.user)+'/job_'+str(self.slurm_job_id)+'/step_batch '+str(cpid)
 
         # Set the container process free from the docker cgroups
         subprocess.Popen('cgclassify -g blkio:/ '+str(cpid), shell=True, stdout=subprocess.PIPE)
