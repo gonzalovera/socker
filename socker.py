@@ -88,17 +88,32 @@ class Socker:
 
         return True
 
-    def safetyChecks( self, argv ):
-        """Second phase initialization, checking values to ensure it is safe to run while building cmd string"""
-
-        # Get and check the list of authorized images
+    def loadImages( self ):
+        """ Get the list of authorized images """
         try:
             self.images = filter(None,[line.strip() for line in open( self.socker_images_file,'r')])
             if len(self.images) == 0:
                 raise Exception()
         except:
             print 'No authorized images to run. Socker cannot be used at the moment.\nContact ' + self.msgErr_contact 
+            if self.verbose:
+                e = sys.exc_info()[0]
+                print 'Error: '+str( e )
             return False
+        else:
+            return True
+        ##This part should be used when you have a secure local docker registry
+        # p = subprocess.Popen('docker images', shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        # out,err = p.communicate()
+        # if p.returncode == 0:
+        #     print out
+        #     sys.exit()
+        # else:
+        #     print err
+        #     sys.exit(2)
+
+    def safetyChecks( self, argv ):
+        """Second phase initialization, checking values to ensure it is safe to run while building cmd string"""
 
         if len(argv) < 2:
             print 'You need to specify an image to run'
@@ -267,7 +282,17 @@ def reincarnate(user_uid, user_gid):
 
 
 def main(argv):
-    """ socker algo """
+    """ socker main algorithm """
+
+    # Checking empty args
+    if len(argv) == 0:
+        sck.printHelp()
+        sys.exit( 0 )
+
+    # Checking if help is needed
+    if argv[0] in ['-h','--help']:
+        sck.printHelp()
+        sys.exit( 0 ) 
 
     # Initialization
     sck = Socker()
@@ -280,15 +305,6 @@ def main(argv):
 
     if not sck.getDockerVersion() : sys.exit( 2 )
     
-    if len(argv) == 0:
-        sck.printHelp()
-        sys.exit( 0 )
-
-    # Checking if help is needed
-    if argv[0] in ['-h','--help']:
-        sck.printHelp()
-        sys.exit( 0 )    
-
     # Show version
     if argv[0] == '--version':
         print 'Socker version: release '+VERSION
@@ -302,25 +318,15 @@ def main(argv):
 
     # List images
     if argv[0] == 'images':
-        print '\n'.join(self.images)
+        if not sck.loadImages(): 
+            sys.exit( 2 )
+        print '\n'.join( self.images )
         sys.exit()
-        ##This part should be used when you have a secure local docker registry
-        # p = subprocess.Popen('docker images', shell=True, stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        # out,err = p.communicate()
-        # if p.returncode == 0:
-        #     print out
-        #     sys.exit()
-        # else:
-        #     print err
-        #     sys.exit(2)
+
     # Check if ready to run
     elif argv[0] == 'run':
-        try:
-            if not sck.safetyChecks( argv ):
-                print 'Program stopped. Request support from ' + sck.msgErr_contact
-                sys.exit( 2 )
-        except:
-            print 'The run command should be: socker run <image> <command>'
+        if not sck.safetyChecks( argv ):
+            print 'Program stopped. Request support from ' + sck.msgErr_contact
             sys.exit( 2 )
     # No command, no joy
     else:
